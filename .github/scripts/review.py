@@ -1,6 +1,6 @@
-import openai
 import subprocess
 import sys
+import anthropic
 
 try:
     diff = subprocess.check_output(
@@ -16,29 +16,34 @@ if not diff.strip():
     print("No diff. Skipping.")
     sys.exit(0)
 
-client = openai.OpenAI()
+client = anthropic.Anthropic()
 
-res = client.chat.completions.create(
-    model="gpt-4o",
+res = client.messages.create(
+    model="claude-haiku-4-5-20251001",
+    max_tokens=1024,
+    system="""You are a secure coding expert. Review the code diff for CRITICAL issues only:
+1. Hardcoded API keys, passwords, or secrets in the code
+2. SQL injection or command injection vulnerabilities
+3. Path traversal risks from user input
+
+Only output 'CRITICAL:' if you find one of the above serious issues.
+For minor style issues or suggestions, ignore them.
+If no critical issues found, just output 'OK'.""",
     messages=[
         {
-            "role": "system",
-            "content": "You are a secure coding expert. Review the code diff for: 1.Hardcoded API keys or passwords 2.Injection vulnerabilities 3.Path traversal risks 4.Missing input validation 5.Sensitive info in error messages 6.Excessive permissions 7.Obvious bugs 8.Missing exception handling. If any problem found, start with 'PROBLEM:' and describe it. If no problem, just say 'OK'."
-        },
-        {
             "role": "user",
-            "content": f"Review this diff:\n\n{diff[:4000]}"
+            "content": f"Review this diff for critical security issues only:\n\n{diff[:4000]}"
         }
     ]
 )
 
-review = res.choices[0].message.content
+review = res.content[0].text
 print("===== Security Review =====")
 print(review)
 print("===========================")
 
-if "PROBLEM:" in review:
-    print("Review NG")
+if "CRITICAL:" in review:
+    print("Review NG - Critical security issue found")
     sys.exit(1)
 
 print("Review OK")
