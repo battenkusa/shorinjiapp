@@ -1,8 +1,22 @@
-import openai
+コミットが1つしかないため HEAD~1 が存在しないエラーです。review.py を修正します。
+修正
+powershellnotepad .github\scripts\review.py
+中身を全部消して以下を貼り付けて Ctrl+S で保存：
+pythonimport openai
 import subprocess
 import sys
 
-diff = subprocess.check_output(["git", "diff", "HEAD~1"]).decode("utf-8")
+# コミットが1つの場合は HEAD~1 が存在しないので分岐
+try:
+    diff = subprocess.check_output(
+        ["git", "diff", "HEAD~1", "HEAD"],
+        stderr=subprocess.DEVNULL
+    ).decode("utf-8")
+except subprocess.CalledProcessError:
+    # 初回コミットの場合は全ファイルを対象にする
+    diff = subprocess.check_output(
+        ["git", "show", "HEAD"]
+    ).decode("utf-8")
 
 if not diff.strip():
     print("差分なし。スキップします。")
