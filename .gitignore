@@ -1,0 +1,10 @@
+# venv関連（仮想環境は除外）
+Include/
+Lib/
+Scripts/
+pyvenv.cfg
+
+# その他
+__pycache__/
+*.pyc
+.env
