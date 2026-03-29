@@ -1,4 +1,4 @@
-name: Claude Code + Codex セキュリティレビュー + 承認マージ
+name: Claude Code Auto Review
 
 on:
   issues:
@@ -6,9 +6,8 @@ on:
 
 jobs:
 
-  # ── ① コード生成 → レビュー → PR作成 ──────────────
   generate-and-review:
-    if: github.event.label.name == 'claude'
+    if: github.event.label.name == 'Claude'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -16,71 +15,55 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: コードを取得
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Python セットアップ
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Claude Code でコード生成
+      - name: Claude Code
         uses: anthropics/claude-code-action@beta
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
 
-      - name: 依存ライブラリをインストール
+      - name: Install dependencies
         run: pip install openai
 
-      - name: Codex でセキュリティレビュー
+      - name: Codex Security Review
         run: python .github/scripts/review.py
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
-      - name: PR を自動作成
+      - name: Create PR
         id: create-pr
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          title: "[${{ github.event.issue.title }}] 自動生成PR"
+          title: "[${{ github.event.issue.title }}] Auto PR"
           body: |
             Closes #${{ github.event.issue.number }}
-
-            ## 変更内容
-            Claude Code が Issue の指示をもとに自動生成しました。
-
-            ## Codex セキュリティレビュー
-            - APIキー直書きチェック：済
-            - インジェクション対策チェック：済
-            - パストラバーサルチェック：済
-            - 例外処理チェック：済
-            - 結果：**問題なし**
-
-            ## 承認をお願いします
-            内容を確認のうえ「Approve」してください。
+            Codex security review passed.
           branch: "feature/issue-${{ github.event.issue.number }}"
           base: main
 
-  # ── ② 人間の承認待ち（ここで止まる）─────────────
   wait-for-approval:
     needs: generate-and-review
     runs-on: ubuntu-latest
     environment: production
-
     steps:
-      - name: 承認待ち
-        run: echo "承認されました。マージを実行します。"
+      - name: Approved
+        run: echo "Approved. Merging..."
 
-  # ── ③ 承認後にマージ実行 ──────────────────────────
   merge-pr:
     needs: wait-for-approval
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
       contents: write
-
     steps:
-      - name: PR をマージ
+      - name: Merge PR
         uses: actions/github-script@v7
         with:
           script: |
@@ -97,7 +80,5 @@ jobs:
                 pull_number: prs.data[0].number,
                 merge_method: 'squash'
               });
-              console.log('マージ完了！');
-            } else {
-              console.log('マージ対象のPRが見つかりませんでした');
+              console.log('Merged!');
             }
