@@ -1,6 +1,6 @@
 Include/
 Lib/
-Scripts/
+/Scripts/
 pyvenv.cfg
 __pycache__/
 *.pyc
