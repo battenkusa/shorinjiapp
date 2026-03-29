@@ -1,11 +1,8 @@
 name: Claude Code Auto Review
-
 on:
   issues:
     types: [labeled]
-
 jobs:
-
   generate-and-review:
     if: github.event.label.name == 'Claude'
     runs-on: ubuntu-latest
@@ -14,29 +11,23 @@ jobs:
       issues: write
       pull-requests: write
       id-token: write
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Claude Code
         uses: anthropics/claude-code-action@beta
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-
       - name: Install dependencies
         run: pip install anthropic
-
-      - name: Codex Security Review
+      - name: Security Review
         run: python .github/scripts/review.py
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       - name: Create PR
         id: create-pr
         uses: peter-evans/create-pull-request@v6
@@ -45,10 +36,9 @@ jobs:
           title: "[${{ github.event.issue.title }}] Auto PR"
           body: |
             Closes #${{ github.event.issue.number }}
-            Codex security review passed.
+            Security review passed.
           branch: "feature/issue-${{ github.event.issue.number }}"
           base: main
-
   wait-for-approval:
     needs: generate-and-review
     runs-on: ubuntu-latest
@@ -56,7 +46,6 @@ jobs:
     steps:
       - name: Approved
         run: echo "Approved. Merging..."
-
   merge-pr:
     needs: wait-for-approval
     runs-on: ubuntu-latest
