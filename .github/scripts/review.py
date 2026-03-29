@@ -1,25 +1,19 @@
-コミットが1つしかないため HEAD~1 が存在しないエラーです。review.py を修正します。
-修正
-powershellnotepad .github\scripts\review.py
-中身を全部消して以下を貼り付けて Ctrl+S で保存：
-pythonimport openai
+import openai
 import subprocess
 import sys
 
-# コミットが1つの場合は HEAD~1 が存在しないので分岐
 try:
     diff = subprocess.check_output(
         ["git", "diff", "HEAD~1", "HEAD"],
         stderr=subprocess.DEVNULL
     ).decode("utf-8")
 except subprocess.CalledProcessError:
-    # 初回コミットの場合は全ファイルを対象にする
     diff = subprocess.check_output(
         ["git", "show", "HEAD"]
     ).decode("utf-8")
 
 if not diff.strip():
-    print("差分なし。スキップします。")
+    print("No diff. Skipping.")
     sys.exit(0)
 
 client = openai.OpenAI()
@@ -29,41 +23,23 @@ res = client.chat.completions.create(
     messages=[
         {
             "role": "system",
-            "content": """あなたはセキュアコーディングの専門家です。
-以下の観点でコードを厳しくレビューしてください。
-
-【セキュリティ確認項目】
-1. APIキー・パスワードがコードに直書きされていないか
-2. ユーザー入力をそのまま使っていないか（インジェクション）
-3. ファイルパスに任意の値を使っていないか（パストラバーサル）
-4. 外部からの入力を検証しているか
-5. エラーメッセージに内部情報が含まれていないか
-6. 不要な権限を持っていないか
-
-【コード品質確認項目】
-7. 明らかなバグやエラーがないか
-8. 日本語文字列が正しく扱われているか
-9. 例外処理が適切にされているか
-
-問題があれば必ず「問題あり：」で始めて、
-該当箇所と修正方法を具体的に指摘してください。
-問題がなければ「問題なし」とだけ答えてください。"""
+            "content": "You are a secure coding expert. Review the code diff for: 1.Hardcoded API keys or passwords 2.Injection vulnerabilities 3.Path traversal risks 4.Missing input validation 5.Sensitive info in error messages 6.Excessive permissions 7.Obvious bugs 8.Missing exception handling. If any problem found, start with 'PROBLEM:' and describe it. If no problem, just say 'OK'."
         },
         {
             "role": "user",
-            "content": f"以下のコード差分をレビューしてください。\n\n{diff[:4000]}"
+            "content": f"Review this diff:\n\n{diff[:4000]}"
         }
     ]
 )
 
 review = res.choices[0].message.content
-print("===== Codex セキュリティレビュー結果 =====")
+print("===== Security Review =====")
 print(review)
-print("==========================================")
+print("===========================")
 
-if "問題あり" in review:
-    print("レビューNG：セキュリティまたは品質の問題が検出されました")
+if "PROBLEM:" in review:
+    print("Review NG")
     sys.exit(1)
 
-print("レビューOK：問題なし")
+print("Review OK")
 sys.exit(0)
