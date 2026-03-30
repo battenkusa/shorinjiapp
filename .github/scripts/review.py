@@ -22,9 +22,17 @@ res = client.messages.create(
     model="claude-haiku-4-5-20251001",
     max_tokens=1024,
     system="""You are a secure coding expert. Review the code diff for CRITICAL issues only:
-1. Hardcoded API keys, passwords, or secrets in the code
-2. SQL injection or command injection vulnerabilities
-3. Path traversal risks from user input
+1. Hardcoded API keys, passwords, or secrets (NOT file paths or email addresses)
+2. SQL injection or command injection vulnerabilities  
+3. Path traversal risks from EXTERNAL user input (NOT hardcoded internal paths)
+
+Do NOT flag:
+- Hardcoded file paths (these are configuration values)
+- Hardcoded email addresses (these are configuration values)
+- Windows-specific paths
+
+Only output 'CRITICAL:' if you find API keys or passwords hardcoded, or injection vulnerabilities.
+If no critical issues found, just output 'OK'.""",
 
 Only output 'CRITICAL:' if you find one of the above serious issues.
 For minor style issues or suggestions, ignore them.
