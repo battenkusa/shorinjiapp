@@ -2,11 +2,201 @@ import streamlit as st
 from pathlib import Path
 from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage
+import os
+import json
+import smtplib
+import platform
+from datetime import datetime, timedelta
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 st.set_page_config(page_title="葛飾区少林寺拳法連盟AIチーム", layout="wide")
 st.title("🤝 葛飾区少林寺拳法連盟AIチーム")
 
 llm = ChatOllama(model="llama3.2")
+
+# ── ヘルパー関数（提出資料監視用） ──────────────────────────
+def get_monitor_folder():
+    """監視対象フォルダのパスを取得"""
+    if platform.system() == "Windows":
+        return Path(r"C:\Users\batte\OneDrive\少林寺\葛飾区連盟\AI作業フォルダ\提出関連資料")
+    else:
+        # Windows以外の環境ではinputフォルダを使用
+        return Path("input")
+
+def get_last_scan_time():
+    """最後のスキャン時刻を取得"""
+    scan_file = Path("output/last_scan.json")
+    if scan_file.exists():
+        try:
+            with open(scan_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return datetime.fromisoformat(data["last_scan"])
+        except:
+            pass
+    return datetime.min
+
+def save_last_scan_time():
+    """最後のスキャン時刻を保存"""
+    scan_file = Path("output/last_scan.json")
+    scan_file.parent.mkdir(parents=True, exist_ok=True)
+    data = {"last_scan": datetime.now().isoformat()}
+    with open(scan_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def read_file_content(file_path):
+    """ファイル内容を読み込む"""
+    file_path = Path(file_path)
+    
+    try:
+        if file_path.suffix.lower() == '.pdf':
+            import pdfplumber
+            with pdfplumber.open(file_path) as pdf:
+                text = "\n".join([
+                    page.extract_text() or "" 
+                    for page in pdf.pages
+                ])
+                return text
+        
+        elif file_path.suffix.lower() == '.docx':
+            from docx import Document
+            doc = Document(file_path)
+            text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+            return text
+        
+        elif file_path.suffix.lower() == '.txt':
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        
+        else:
+            return None
+    except Exception as e:
+        st.error(f"ファイル読み込みエラー ({file_path.name}): {e}")
+        return None
+
+def analyze_document(content, filename):
+    """文書をOllamaで分析"""
+    prompt = f"""以下の文書を分析して、以下の項目を抽出してください。
+
+文書名: {filename}
+内容:
+{content[:2000]}
+
+以下の形式で回答してください：
+
+【概要】
+（この文書の概要を簡潔に）
+
+【実施内容】
+（行うべき内容・作業を具体的に）
+
+【提出期限】
+（文書に記載の期限日時。見つからない場合は「記載なし」）
+
+【依頼内容締切】
+（提出期限の10日前の日付。提出期限が記載ありの場合のみ計算）
+
+【緊急度】
+（高・中・低で評価）"""
+
+    try:
+        response = llm.invoke([HumanMessage(content=prompt)])
+        return response.content
+    except Exception as e:
+        return f"分析エラー: {e}"
+
+def send_email(subject, body):
+    """Gmail経由でメール送信"""
+    gmail_address = os.environ.get("GMAIL_ADDRESS")
+    gmail_password = os.environ.get("GMAIL_APP_PASSWORD")
+    
+    if not gmail_address or not gmail_password:
+        raise ValueError("環境変数 GMAIL_ADDRESS または GMAIL_APP_PASSWORD が設定されていません")
+    
+    msg = MIMEMultipart()
+    msg['From'] = gmail_address
+    msg['To'] = "battenkusayokayoka@gmail.com"
+    msg['Subject'] = subject
+    
+    msg.attach(MIMEText(body, 'plain', 'utf-8'))
+    
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+        server.login(gmail_address, gmail_password)
+        server.send_message(msg)
+
+def scan_for_new_files():
+    """新しいファイルをスキャンして分析・メール送信"""
+    monitor_folder = get_monitor_folder()
+    
+    if not monitor_folder.exists():
+        return f"監視フォルダが見つかりません: {monitor_folder}"
+    
+    last_scan = get_last_scan_time()
+    new_files = []
+    
+    # 対象ファイル拡張子
+    target_extensions = {'.pdf', '.docx', '.txt'}
+    
+    for file_path in monitor_folder.rglob('*'):
+        if (file_path.is_file() and 
+            file_path.suffix.lower() in target_extensions and
+            datetime.fromtimestamp(file_path.stat().st_mtime) > last_scan):
+            new_files.append(file_path)
+    
+    if not new_files:
+        save_last_scan_time()
+        return "新しいファイルはありませんでした"
+    
+    results = []
+    for file_path in new_files:
+        st.info(f"分析中: {file_path.name}")
+        
+        # ファイル内容を読み込み
+        content = read_file_content(file_path)
+        if not content:
+            continue
+        
+        # AI分析
+        analysis = analyze_document(content, file_path.name)
+        
+        # メール送信
+        try:
+            subject = f"【提出資料監視】新しい資料が検出されました: {file_path.name}"
+            body = f"""葛飾区少林寺拳法連盟AIチーム
+
+新しい提出関連資料が検出されました。
+
+ファイル名: {file_path.name}
+検出時刻: {datetime.now().strftime('%Y年%m月%d日 %H:%M:%S')}
+ファイルパス: {file_path}
+
+=== AI分析結果 ===
+{analysis}
+
+=== システム情報 ===
+この通知は提出資料監視システムによって自動送信されました。
+"""
+            
+            send_email(subject, body)
+            results.append(f"✅ {file_path.name} - 分析・メール送信完了")
+            
+        except Exception as e:
+            results.append(f"❌ {file_path.name} - メール送信エラー: {e}")
+    
+    save_last_scan_time()
+    return "\n".join(results)
+
+# ── 起動時の自動スキャン ──────────────────────────
+if 'auto_scan_done' not in st.session_state:
+    st.session_state.auto_scan_done = True
+    
+    # バックグラウンドで自動スキャン実行
+    try:
+        result = scan_for_new_files()
+        if "新しいファイルはありませんでした" not in result:
+            st.info("🔍 起動時スキャン完了: " + result.split('\n')[0])
+    except Exception as e:
+        st.warning(f"⚠️ 起動時スキャンでエラーが発生: {e}")
 
 menu = st.sidebar.radio("機能メニュー", [
     "📋 議事録作成",
@@ -14,6 +204,7 @@ menu = st.sidebar.radio("機能メニュー", [
     "📢 お知らせ作成",
     "📅 活動計画作成",
     "📄 大会資料作成",
+    "📬 提出資料監視",
 ])
 
 # ── 議事録作成 ──────────────────────────
@@ -171,3 +362,118 @@ elif menu == "📄 大会資料作成":
         st.code(out_path)
         st.subheader("生成された内容（プレビュー）")
         st.markdown(updated_text)
+
+# ── 提出資料監視 ────────────────────────
+elif menu == "📬 提出資料監視":
+    st.subheader("提出資料監視・メール送信")
+    st.caption("指定フォルダの新しいファイルを監視し、AI分析結果をメールで自動通知します")
+    
+    # 監視設定表示
+    monitor_folder = get_monitor_folder()
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.info("📁 監視フォルダ")
+        st.code(str(monitor_folder))
+        
+        st.info("📧 通知先メール")
+        st.code("battenkusayokayoka@gmail.com")
+    
+    with col2:
+        st.info("📋 対象ファイル")
+        st.write("• PDF (.pdf)")
+        st.write("• Word (.docx)")
+        st.write("• テキスト (.txt)")
+        
+        st.info("⚙️ 環境変数設定")
+        gmail_ok = bool(os.environ.get("GMAIL_ADDRESS"))
+        password_ok = bool(os.environ.get("GMAIL_APP_PASSWORD"))
+        st.write(f"• GMAIL_ADDRESS: {'✅' if gmail_ok else '❌'}")
+        st.write(f"• GMAIL_APP_PASSWORD: {'✅' if password_ok else '❌'}")
+    
+    # スキャン履歴表示
+    last_scan = get_last_scan_time()
+    if last_scan != datetime.min:
+        st.success(f"前回スキャン: {last_scan.strftime('%Y年%m月%d日 %H:%M:%S')}")
+    else:
+        st.warning("初回スキャンです")
+    
+    # 手動スキャンボタン
+    if st.button("🔍 手動スキャン実行", type="primary"):
+        if not gmail_ok or not password_ok:
+            st.error("❌ Gmail送信の環境変数が設定されていません")
+            st.info("環境変数 GMAIL_ADDRESS と GMAIL_APP_PASSWORD を設定してください")
+        else:
+            with st.spinner("フォルダをスキャン中..."):
+                try:
+                    result = scan_for_new_files()
+                    st.success("スキャン完了!")
+                    st.text_area("結果", value=result, height=200)
+                except Exception as e:
+                    st.error(f"スキャンエラー: {e}")
+    
+    # 使用方法の説明
+    st.subheader("📖 使用方法")
+    st.markdown("""
+    **自動監視:**
+    - Streamlit起動時に自動的にスキャンが実行されます
+    - 新しいファイルが見つかった場合、自動的にメール通知されます
+    
+    **手動スキャン:**
+    - 上記のボタンでいつでも手動スキャンできます
+    - 前回スキャン時刻以降に更新されたファイルが対象です
+    
+    **分析内容:**
+    - 概要、実施内容、提出期限、依頼内容締切、緊急度
+    - Ollama (llama3.2) によるAI分析
+    
+    **セキュリティ:**
+    - Gmail送信には環境変数を使用（APIキー直書き禁止）
+    - ファイルパスは Path() で安全に処理
+    """)
+    
+    # 環境変数設定ガイド
+    if not gmail_ok or not password_ok:
+        st.subheader("⚙️ 環境変数設定ガイド")
+        st.code("""
+# .envファイルまたはシステム環境変数に設定
+GMAIL_ADDRESS=your-email@gmail.com
+GMAIL_APP_PASSWORD=your-app-password
+
+# Googleアプリパスワードの取得方法：
+# 1. Googleアカウント設定 > セキュリティ
+# 2. 2段階認証を有効化
+# 3. アプリパスワードを生成
+        """)
+    
+    st.subheader("📂 監視フォルダの状態")
+    if monitor_folder.exists():
+        st.success(f"✅ フォルダが存在します: {monitor_folder}")
+        
+        # フォルダ内のファイル一覧
+        target_files = []
+        target_extensions = {'.pdf', '.docx', '.txt'}
+        
+        try:
+            for file_path in monitor_folder.rglob('*'):
+                if file_path.is_file() and file_path.suffix.lower() in target_extensions:
+                    target_files.append({
+                        'ファイル名': file_path.name,
+                        '更新日時': datetime.fromtimestamp(file_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S'),
+                        '拡張子': file_path.suffix,
+                        'サイズ': f"{file_path.stat().st_size / 1024:.1f} KB"
+                    })
+            
+            if target_files:
+                st.write(f"対象ファイル: {len(target_files)}件")
+                st.dataframe(target_files[:10])  # 最初の10件のみ表示
+                if len(target_files) > 10:
+                    st.info(f"（他 {len(target_files) - 10}件のファイルがあります）")
+            else:
+                st.info("対象ファイル（.pdf/.docx/.txt）は見つかりませんでした")
+                
+        except Exception as e:
+            st.error(f"フォルダスキャンエラー: {e}")
+    else:
+        st.error(f"❌ 監視フォルダが見つかりません: {monitor_folder}")
+        st.info("Windows環境以外では 'input/' フォルダを監視します")
