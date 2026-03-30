@@ -2,11 +2,220 @@ import streamlit as st
 from pathlib import Path
 from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage
+import os
+import json
+from datetime import datetime, timedelta
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import pdfplumber
+from docx import Document as DocxDocument
 
 st.set_page_config(page_title="葛飾区少林寺拳法連盟AIチーム", layout="wide")
 st.title("🤝 葛飾区少林寺拳法連盟AIチーム")
 
 llm = ChatOllama(model="llama3.2")
+
+# =====================================
+# 提出資料監視関連の関数定義
+# =====================================
+
+def scan_and_process_documents(target_folder, manual=True):
+    """フォルダをスキャンして新しいドキュメントを処理する"""
+    if manual:
+        with st.spinner("フォルダをスキャン中..."):
+            result = _scan_documents(target_folder)
+    else:
+        result = _scan_documents(target_folder)
+    
+    if result['new_files']:
+        if manual:
+            st.success(f"新しいファイルが{len(result['new_files'])}件見つかりました")
+            for file_info in result['new_files']:
+                st.write(f"📄 {file_info['name']} ({file_info['modified']})")
+        
+        # 各ファイルを分析してメール送信
+        for file_info in result['new_files']:
+            if manual:
+                with st.spinner(f"'{file_info['name']}'を分析中..."):
+                    analysis = analyze_document(file_info['path'])
+                    if analysis:
+                        send_notification_email(file_info, analysis)
+                        st.success(f"'{file_info['name']}'の分析完了・メール送信済み")
+            else:
+                analysis = analyze_document(file_info['path'])
+                if analysis:
+                    send_notification_email(file_info, analysis)
+    elif manual:
+        st.info("新しいファイルは見つかりませんでした")
+
+
+def _scan_documents(target_folder):
+    """ドキュメントフォルダをスキャンして新しいファイルを検出"""
+    folder_path = Path(target_folder)
+    if not folder_path.exists():
+        return {'new_files': []}
+    
+    # 前回のスキャン時刻を取得
+    last_scan_path = Path("output/last_scan.json")
+    last_scan_time = None
+    
+    if last_scan_path.exists():
+        try:
+            with open(last_scan_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                last_scan_time = datetime.fromisoformat(data['timestamp'])
+        except:
+            pass
+    
+    # 対象ファイル形式
+    target_extensions = ['.pdf', '.docx', '.txt']
+    new_files = []
+    
+    for ext in target_extensions:
+        for file_path in folder_path.glob(f"*{ext}"):
+            if file_path.is_file():
+                modified_time = datetime.fromtimestamp(file_path.stat().st_mtime)
+                
+                # 前回スキャン後に更新されたファイルのみ対象
+                if last_scan_time is None or modified_time > last_scan_time:
+                    new_files.append({
+                        'name': file_path.name,
+                        'path': str(file_path),
+                        'modified': modified_time.strftime('%Y-%m-%d %H:%M')
+                    })
+    
+    # 今回のスキャン時刻を記録
+    current_time = datetime.now()
+    last_scan_path.parent.mkdir(exist_ok=True)
+    with open(last_scan_path, 'w', encoding='utf-8') as f:
+        json.dump({
+            'timestamp': current_time.isoformat(),
+            'scanned_files': len(new_files)
+        }, f, ensure_ascii=False, indent=2)
+    
+    return {'new_files': new_files}
+
+
+def analyze_document(file_path):
+    """ドキュメントをAIで分析する"""
+    try:
+        # ファイル内容を読み込み
+        file_path = Path(file_path)
+        content = ""
+        
+        if file_path.suffix.lower() == '.pdf':
+            with pdfplumber.open(file_path) as pdf:
+                content = "\n".join(
+                    page.extract_text() for page in pdf.pages
+                    if page.extract_text()
+                )
+        elif file_path.suffix.lower() == '.docx':
+            doc = DocxDocument(file_path)
+            content = "\n".join(paragraph.text for paragraph in doc.paragraphs)
+        elif file_path.suffix.lower() == '.txt':
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        
+        if not content.strip():
+            return None
+        
+        # AIで分析
+        prompt = f"""以下の提出資料を分析して、下記の項目を抽出してください：
+
+1. 概要（何についての資料か）
+2. 実施内容（具体的に何をするのか）
+3. 提出期限（資料に記載されている期限日）
+4. 依頼内容締切（提出期限の10日前の日付）
+
+資料内容：
+{content[:2000]}
+
+以下のJSON形式で出力してください：
+{{
+  "概要": "...",
+  "実施内容": "...",
+  "提出期限": "YYYY-MM-DD",
+  "依頼内容締切": "YYYY-MM-DD"
+}}"""
+        
+        response = llm.invoke([HumanMessage(content=prompt)])
+        
+        # JSON部分を抽出
+        response_text = response.content.strip()
+        start = response_text.find('{')
+        end = response_text.rfind('}') + 1
+        
+        if start >= 0 and end > start:
+            json_str = response_text[start:end]
+            return json.loads(json_str)
+        
+        return None
+        
+    except Exception as e:
+        return None
+
+
+def send_notification_email(file_info, analysis):
+    """分析結果をもとにメール通知を送信"""
+    try:
+        # 環境変数から認証情報を取得
+        gmail_address = os.getenv('GMAIL_ADDRESS')
+        gmail_app_password = os.getenv('GMAIL_APP_PASSWORD')
+        
+        if not gmail_address or not gmail_app_password:
+            return False
+        
+        # メール内容作成
+        subject = f"📬 新しい提出資料検出: {file_info['name']}"
+        
+        body = f"""新しい提出資料が検出されました。
+
+────────────────────────────────────────
+📄 ファイル情報
+────────────────────────────────────────
+ファイル名: {file_info['name']}
+更新日時: {file_info['modified']}
+ファイルパス: {file_info['path']}
+
+────────────────────────────────────────
+🤖 AI分析結果
+────────────────────────────────────────
+概要: {analysis.get('概要', '分析できませんでした')}
+
+実施内容: {analysis.get('実施内容', '分析できませんでした')}
+
+提出期限: {analysis.get('提出期限', '期限不明')}
+依頼内容締切: {analysis.get('依頼内容締切', '期限不明')}
+
+────────────────────────────────────────
+
+自動生成メール by 葛飾区少林寺拳法連盟AIチーム
+"""
+        
+        # メール送信
+        msg = MIMEMultipart()
+        msg['From'] = gmail_address
+        msg['To'] = 'battenkusayokayoka@gmail.com'
+        msg['Subject'] = subject
+        
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(gmail_address, gmail_app_password)
+        text = msg.as_string()
+        server.sendmail(gmail_address, 'battenkusayokayoka@gmail.com', text)
+        server.quit()
+        
+        return True
+        
+    except Exception as e:
+        return False
+
+# =====================================
+# メインUI処理
+# =====================================
 
 menu = st.sidebar.radio("機能メニュー", [
     "📋 議事録作成",
@@ -14,6 +223,7 @@ menu = st.sidebar.radio("機能メニュー", [
     "📢 お知らせ作成",
     "📅 活動計画作成",
     "📄 大会資料作成",
+    "📬 提出資料監視",
 ])
 
 # ── 議事録作成 ──────────────────────────
@@ -113,9 +323,6 @@ elif menu == "📄 大会資料作成":
     )
 
     if st.button("Word資料を生成する"):
-        import pdfplumber
-        from docx import Document as DocxDocument
-
         # ① PDFを読み込む
         with st.spinner("PDFを読み込み中..."):
             try:
@@ -171,3 +378,45 @@ elif menu == "📄 大会資料作成":
         st.code(out_path)
         st.subheader("生成された内容（プレビュー）")
         st.markdown(updated_text)
+
+# ── 提出資料監視 ────────────────────────
+elif menu == "📬 提出資料監視":
+    st.subheader("提出資料監視・メール送信")
+    st.caption("新しい提出資料を自動検出して、AIで分析後にメール通知を送信します")
+    
+    # 監視対象フォルダの設定
+    target_folder = r"C:\Users\batte\OneDrive\少林寺\葛飾区連盟\AI作業フォルダ\提出関連資料"
+    
+    # Windows環境でない場合のフォールバック
+    if not Path(target_folder).exists():
+        target_folder = "input"
+        st.info(f"メインフォルダが見つからないため、{target_folder}フォルダを監視します")
+    
+    st.info(f"監視対象: {target_folder}")
+    
+    # 手動スキャン実行
+    if st.button("今すぐスキャン実行"):
+        scan_and_process_documents(target_folder, manual=True)
+    
+    # 最終スキャン時刻表示
+    last_scan_path = Path("output/last_scan.json")
+    if last_scan_path.exists():
+        with open(last_scan_path, 'r', encoding='utf-8') as f:
+            last_scan_data = json.load(f)
+        st.text(f"最終スキャン: {last_scan_data.get('timestamp', '未記録')}")
+    else:
+        st.text("最終スキャン: 未実行")
+
+# 自動スキャン機能（セッション開始時に1回実行）
+if 'auto_scan_done' not in st.session_state:
+    st.session_state.auto_scan_done = True
+    # 監視対象フォルダの設定
+    target_folder = r"C:\Users\batte\OneDrive\少林寺\葛飾区連盟\AI作業フォルダ\提出関連資料"
+    if not Path(target_folder).exists():
+        target_folder = "input"
+    
+    # バックグラウンドで自動スキャン実行
+    try:
+        scan_and_process_documents(target_folder, manual=False)
+    except Exception as e:
+        pass  # エラーは無視してUI表示を妨げない
