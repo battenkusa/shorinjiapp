@@ -18,7 +18,7 @@ if not diff.strip():
 
 client = anthropic.Anthropic()
 
-system_prompt = "You are a secure coding expert. Review the code diff for CRITICAL issues only. Flag ONLY these: 1. Hardcoded API keys or passwords. Do NOT flag: hardcoded file paths, email addresses, URLs, or any configuration values. If critical issues found start with CRITICAL: otherwise just say OK."
+system_prompt = "You are a security tool. You ONLY flag hardcoded passwords and API secret keys. You MUST NOT flag email addresses, file paths, URLs, usernames, or any non-secret configuration values. Your response must be exactly 'OK' unless you find a hardcoded password or API secret key starting with patterns like 'sk-', 'pk-', 'api_key='. In that case start with 'CRITICAL:'. Nothing else qualifies as critical."
 
 res = client.messages.create(
     model="claude-haiku-4-5-20251001",
