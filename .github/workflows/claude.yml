@@ -22,6 +22,8 @@ jobs:
         uses: anthropics/claude-code-action@beta
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          assignee_trigger: ""
+          label_trigger: "Claude"
       - name: Install dependencies
         run: pip install anthropic
       - name: Security Review
