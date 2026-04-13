@@ -84,7 +84,7 @@ streamlit run app.py
 
 \- PDF読み込みは pdfplumber、Word出力は python-docx を使う（他ライブラリ不可）
 
-\- LLM呼び出しは必ず ChatOllama(model="llama3.2") を使う（外部APIは使わない）
+\- LLM呼び出しは必ず ChatOllama(model="gemma2") を使う（外部APIは使わない）
 
 
 
@@ -122,7 +122,7 @@ streamlit run app.py
 
 問題が発生した場合は以下を確認：
 
-\- Ollamaが起動しているか（`ollama run llama3.2`）
+\- Ollamaが起動しているか（`ollama run gemma2`）
 
 \- 仮想環境が有効か（`myagent\\Scripts\\activate`）
 

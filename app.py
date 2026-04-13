@@ -6,7 +6,7 @@ from langchain_core.messages import HumanMessage
 st.set_page_config(page_title="葛飾区少林寺拳法連盟AIチーム", layout="wide")
 st.title("🤝 葛飾区少林寺拳法連盟AIチーム")
 
-llm = ChatOllama(model="llama3.2")
+llm = ChatOllama(model="gemma2")
 
 menu = st.sidebar.radio("機能メニュー", [
     "📋 議事録作成",
